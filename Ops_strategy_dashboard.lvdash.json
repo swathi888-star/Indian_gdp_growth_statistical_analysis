@@ -1,0 +1,856 @@
+{
+  "datasets": [
+    {
+      "name": "747cd27a",
+      "displayName": "Regional Revenue",
+      "queryLines": [
+        "WITH RegionalTotals AS (\r\n",
+        "    SELECT \r\n",
+        "        l.region,\r\n",
+        "        ROUND(SUM(f.order_value), 2) AS total_region_revenue\r\n",
+        "    FROM my_project_db.gold_sales_fact f\r\n",
+        "    JOIN my_project_db.gold_dim_leads l ON f.lead_id = l.lead_id\r\n",
+        "    WHERE YEAR(f.order_in_date) = :selected_year\r\n",
+        "    GROUP BY l.region\r\n",
+        "    ORDER BY total_region_revenue DESC\r\n",
+        "    LIMIT 5\r\n",
+        "),\r\n",
+        "DivisionPerformance AS (\r\n",
+        "    SELECT \r\n",
+        "        l.region,\r\n",
+        "        p.division,\r\n",
+        "        ROUND(SUM(f.order_value), 2) AS division_revenue,\r\n",
+        "        ROW_NUMBER() OVER(PARTITION BY l.region ORDER BY SUM(f.order_value) DESC) as div_rank\r\n",
+        "    FROM my_project_db.gold_sales_fact f\r\n",
+        "    JOIN my_project_db.gold_dim_leads l ON f.lead_id = l.lead_id\r\n",
+        "    JOIN my_project_db.gold_dim_products p ON f.invt_id = p.invt_id\r\n",
+        "    WHERE YEAR(f.order_in_date) = :selected_year\r\n",
+        "      AND l.region IN (SELECT region FROM RegionalTotals)\r\n",
+        "    GROUP BY l.region, p.division\r\n",
+        ")\r\n",
+        "SELECT \r\n",
+        "    rt.region,\r\n",
+        "    rt.total_region_revenue,\r\n",
+        "    dp.division AS top_division,\r\n",
+        "    dp.division_revenue\r\n",
+        "FROM RegionalTotals rt\r\n",
+        "JOIN DivisionPerformance dp ON rt.region = dp.region\r\n",
+        "WHERE dp.div_rank = 1\r\n",
+        "ORDER BY rt.total_region_revenue DESC;"
+      ],
+      "parameters": [
+        {
+          "displayName": "Year",
+          "keyword": "selected_year",
+          "dataType": "INTEGER",
+          "defaultSelection": {
+            "values": {
+              "dataType": "INTEGER",
+              "values": [
+                {
+                  "value": "2020"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4d1e9136",
+      "displayName": "Operation_bottleneck",
+      "queryLines": [
+        "WITH DelayCounts AS (\r\n",
+        "    SELECT \r\n",
+        "        p.division,\r\n",
+        "        f.reason_name, \r\n",
+        "        COUNT(*) as occurrence_count\r\n",
+        "    FROM my_project_db.gold_sales_fact f\r\n",
+        "    JOIN my_project_db.gold_dim_products p ON f.invt_id = p.invt_id\r\n",
+        "    -- Added the year filter here\r\n",
+        "    WHERE f.reason_name IS NOT NULL \r\n",
+        "      AND YEAR(f.order_in_date) = :selected_year\r\n",
+        "    GROUP BY p.division, f.reason_name\r\n",
+        "),\r\n",
+        "RankedDelays AS (\r\n",
+        "    SELECT \r\n",
+        "        division,\r\n",
+        "        reason_name,\r\n",
+        "        occurrence_count,\r\n",
+        "        ROW_NUMBER() OVER(PARTITION BY division ORDER BY occurrence_count DESC) as rank\r\n",
+        "    FROM DelayCounts\r\n",
+        ")\r\n",
+        "SELECT \r\n",
+        "    division,\r\n",
+        "    reason_name as most_common_bottleneck,\r\n",
+        "    occurrence_count\r\n",
+        "FROM RankedDelays\r\n",
+        "WHERE rank = 1;"
+      ],
+      "parameters": [
+        {
+          "displayName": "Year",
+          "keyword": "selected_year",
+          "dataType": "INTEGER",
+          "defaultSelection": {
+            "values": {
+              "dataType": "INTEGER",
+              "values": [
+                {
+                  "value": "2024"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "catalog": "workspace",
+      "schema": "my_project_db"
+    },
+    {
+      "name": "db55752a",
+      "displayName": "Product_aging",
+      "queryLines": [
+        "SELECT \r\n",
+        "    p.product_sku,\r\n",
+        "    p.division,\r\n",
+        "    YEAR(f.warranty_date) - 2 AS import_year,\r\n",
+        "    f.warranty_date,\r\n",
+        "    SUM(f.inventory_qty - f.order_qty) AS total_unsold_qty,\r\n",
+        "    ROUND(SUM((f.inventory_qty - f.order_qty) * f.purchase_cost), 2) AS total_aging_value\r\n",
+        "FROM my_project_db.gold_sales_fact f\r\n",
+        "JOIN my_project_db.gold_dim_products p ON f.invt_id = p.invt_id\r\n",
+        "WHERE f.warranty_date < date_sub(CURRENT_DATE(), :aging_days)\r\n",
+        "  AND (f.inventory_qty - f.order_qty) > 0\r\n",
+        "  -- Added this filter to sync with your dashboard's global slicer\r\n",
+        "  AND YEAR(f.warranty_date) = :selected_year\r\n",
+        "GROUP BY \r\n",
+        "    p.product_sku, \r\n",
+        "    p.division, \r\n",
+        "    f.warranty_date\r\n",
+        "QUALIFY ROW_NUMBER() OVER(PARTITION BY p.product_sku ORDER BY f.warranty_date DESC) = 1\r\n",
+        "ORDER BY total_aging_value DESC\r\n",
+        "LIMIT 5;"
+      ],
+      "parameters": [
+        {
+          "displayName": "Days",
+          "keyword": "aging_days",
+          "dataType": "INTEGER",
+          "defaultSelection": {
+            "values": {
+              "dataType": "INTEGER",
+              "values": [
+                {
+                  "value": "30"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "displayName": "Year",
+          "keyword": "selected_year",
+          "dataType": "INTEGER",
+          "defaultSelection": {
+            "values": {
+              "dataType": "INTEGER",
+              "values": [
+                {
+                  "value": "2024"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "199a4a46",
+      "displayName": "Source_conversion",
+      "queryLines": [
+        "WITH SourceConversions AS (\r\n",
+        "    SELECT \r\n",
+        "        p.division,\r\n",
+        "        l.source_name,\r\n",
+        "        COUNT(f.order_id) as total_conversions\r\n",
+        "    FROM my_project_db.gold_sales_fact f\r\n",
+        "    JOIN my_project_db.gold_dim_products p ON f.invt_id = p.invt_id\r\n",
+        "    JOIN my_project_db.gold_dim_leads l ON f.lead_id = l.lead_id\r\n",
+        "    -- This filter ensures the logic applies only to the selected year\r\n",
+        "    WHERE YEAR(f.order_in_date) = :selected_year\r\n",
+        "    GROUP BY p.division, l.source_name\r\n",
+        "),\r\n",
+        "RankedSources AS (\r\n",
+        "    SELECT \r\n",
+        "        division,\r\n",
+        "        source_name,\r\n",
+        "        total_conversions,\r\n",
+        "        ROW_NUMBER() OVER(PARTITION BY division ORDER BY total_conversions DESC) as rank\r\n",
+        "    FROM SourceConversions\r\n",
+        ")\r\n",
+        "SELECT \r\n",
+        "    division,\r\n",
+        "    source_name,\r\n",
+        "    total_conversions\r\n",
+        "FROM RankedSources \r\n",
+        "WHERE rank <= 3\r\n",
+        "ORDER BY division, total_conversions DESC;"
+      ],
+      "parameters": [
+        {
+          "displayName": "Year",
+          "keyword": "selected_year",
+          "dataType": "INTEGER",
+          "defaultSelection": {
+            "values": {
+              "dataType": "INTEGER",
+              "values": [
+                {
+                  "value": "2024"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "112ccdc6",
+      "displayName": "Dashboard",
+      "layout": [
+        {
+          "widget": {
+            "name": "o",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "4d1e9136",
+                  "fields": [
+                    {
+                      "name": "sum(occurrence_count)",
+                      "expression": "SUM(`occurrence_count`)"
+                    },
+                    {
+                      "name": "division",
+                      "expression": "`division`"
+                    },
+                    {
+                      "name": "most_common_bottleneck",
+                      "expression": "`most_common_bottleneck`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "showTitle": true,
+                "title": "Division wise Operational Delay",
+                "headerAlignment": "center"
+              },
+              "widgetType": "pie",
+              "encodings": {
+                "angle": {
+                  "fieldName": "sum(occurrence_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Frequency (in Days)"
+                },
+                "color": {
+                  "fieldName": "division",
+                  "displayName": "Division",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "MaterialScience",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 3
+                        }
+                      },
+                      {
+                        "value": "BatteryResearch",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 1
+                        }
+                      },
+                      {
+                        "value": "Lifescience",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 2
+                        }
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": true,
+                  "text": {
+                    "fieldName": "sum(occurrence_count)",
+                    "displayName": "Frequency (in Days)"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "most_common_bottleneck",
+                    "displayName": "Most Frequent Reason"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 5,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "tope",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "747cd27a",
+                  "fields": [
+                    {
+                      "name": "top_division",
+                      "expression": "`top_division`"
+                    },
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "sum(total_region_revenue)",
+                      "expression": "SUM(`total_region_revenue`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "facet": {
+                "type": "wrap",
+                "fieldName": "top_division",
+                "displayName": "Regional Division Performance for the Selected Year",
+                "scale": {
+                  "type": "categorical"
+                }
+              },
+              "version": 3,
+              "frame": {
+                "showTitle": false,
+                "headerAlignment": "center"
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "region",
+                  "displayName": "Region",
+                  "scale": {
+                    "type": "categorical",
+                    "categorySize": {
+                      "type": "number-of-categories",
+                      "number": 5
+                    },
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(total_region_revenue)",
+                  "axis": {
+                    "hideGrid": false,
+                    "hideLabels": false
+                  },
+                  "displayName": "Revenue",
+                  "scale": {
+                    "type": "quantitative",
+                    "reverse": false
+                  }
+                },
+                "color": {
+                  "fieldName": "top_division",
+                  "displayName": "Dominant Division",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Lifescience",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 2
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "top-1",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "db55752a",
+                  "fields": [
+                    {
+                      "name": "import_year",
+                      "expression": "`import_year`"
+                    },
+                    {
+                      "name": "division",
+                      "expression": "`division`"
+                    },
+                    {
+                      "name": "warranty_date",
+                      "expression": "`warranty_date`"
+                    },
+                    {
+                      "name": "sum(total_aging_value)",
+                      "expression": "SUM(`total_aging_value`)"
+                    },
+                    {
+                      "name": "sum(total_unsold_qty)",
+                      "expression": "SUM(`total_unsold_qty`)"
+                    },
+                    {
+                      "name": "product_sku",
+                      "expression": "`product_sku`"
+                    }
+                  ],
+                  "parameterValues": [
+                    {
+                      "keyword": "aging_days",
+                      "selection": {
+                        "values": {
+                          "dataType": "INTEGER",
+                          "values": [
+                            {
+                              "value": "60"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 1
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 4
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 5
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 6
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 7
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 8
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 9
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 10
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top Aging Products by Selected Year",
+                "headerAlignment": "center"
+              },
+              "widgetType": "funnel",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(total_unsold_qty)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Dead Stock "
+                },
+                "y": {
+                  "fieldName": "product_sku",
+                  "displayName": "Product",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "x-reversed"
+                    }
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "import_year",
+                    "displayName": "Year of Import"
+                  },
+                  {
+                    "fieldName": "division",
+                    "displayName": "Division"
+                  },
+                  {
+                    "fieldName": "warranty_date",
+                    "displayName": "Warranty Expires on"
+                  },
+                  {
+                    "fieldName": "sum(total_aging_value)",
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    },
+                    "displayName": "Value"
+                  }
+                ],
+                "label": {
+                  "show": true
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 7,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "802cdd8b",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "199a4a46",
+                  "fields": [
+                    {
+                      "name": "division",
+                      "expression": "`division`"
+                    },
+                    {
+                      "name": "source_name",
+                      "expression": "`source_name`"
+                    },
+                    {
+                      "name": "count(total_conversions)",
+                      "expression": "COUNT(`total_conversions`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "source_name",
+                  "displayName": "Source",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(total_conversions)",
+                  "displayName": "Conversion Count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "division",
+                  "displayName": "Division",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "BatteryResearch",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 1
+                        }
+                      },
+                      {
+                        "value": "Lifescience",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 2
+                        }
+                      },
+                      {
+                        "value": "MaterialScience",
+                        "color": {
+                          "themeColorType": "visualizationColors",
+                          "position": 3
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 12,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "acbf96c4",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "561969e8",
+            "queries": [
+              {
+                "name": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15b57e3c61cb0a0675377170e4925_selected_year",
+                "query": {
+                  "datasetName": "747cd27a",
+                  "parameters": [
+                    {
+                      "name": "selected_year",
+                      "keyword": "selected_year"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d82bec513bba813b321b4b3d54a_selected_year",
+                "query": {
+                  "datasetName": "4d1e9136",
+                  "parameters": [
+                    {
+                      "name": "selected_year",
+                      "keyword": "selected_year"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d840d431e2c9bd1283a992b5ffc_selected_year",
+                "query": {
+                  "datasetName": "db55752a",
+                  "parameters": [
+                    {
+                      "name": "selected_year",
+                      "keyword": "selected_year"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d88941514eca1933eb0739936e7_selected_year",
+                "query": {
+                  "datasetName": "199a4a46",
+                  "parameters": [
+                    {
+                      "name": "selected_year",
+                      "keyword": "selected_year"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "showTitle": true,
+                "showDescription": false
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "INTEGER",
+                    "values": [
+                      {
+                        "value": "2026"
+                      }
+                    ]
+                  }
+                }
+              },
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "parameterName": "selected_year",
+                    "queryName": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15b57e3c61cb0a0675377170e4925_selected_year"
+                  },
+                  {
+                    "parameterName": "selected_year",
+                    "queryName": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d82bec513bba813b321b4b3d54a_selected_year"
+                  },
+                  {
+                    "parameterName": "selected_year",
+                    "queryName": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d840d431e2c9bd1283a992b5ffc_selected_year"
+                  },
+                  {
+                    "parameterName": "selected_year",
+                    "queryName": "parameter_dashboards/01f15b545b3b16b5b2dbe9ca45dacd45/datasets/01f15d88941514eca1933eb0739936e7_selected_year"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#F4F2ED",
+        "dark": "#1F1E1D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#EBE9E2",
+        "dark": "#1B1817"
+      },
+      "widgetBorderColor": {
+        "light": "#D5CEC3",
+        "dark": "#2F2E2B"
+      },
+      "fontColor": {
+        "light": "#3D3C39",
+        "dark": "#FAFBF9"
+      },
+      "selectionColor": {
+        "light": "#5F7E52",
+        "dark": "#7A8F3E"
+      },
+      "visualizationColors": [
+        "#1A4F27",
+        "#B35900",
+        "#3A9BDC",
+        "#7A8F3E",
+        "#E8B200",
+        "#767676",
+        "#C23B22"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    },
+    "applyModeEnabled": false
+  }
+}
