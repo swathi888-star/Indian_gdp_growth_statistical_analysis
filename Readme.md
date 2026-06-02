@@ -25,7 +25,7 @@ This project investigates the key macroeconomic drivers behind India's GDP growt
 - **Machine Learning:** Principal Component Analysis (PCA) for dimensionality reduction and understanding economic "heartbeats."
 
 ## Project Structure
-- `data/`: (If applicable) Raw and processed datasets.
+- `data/`: Raw and processed datasets.
 - `notebooks/`: Jupyter Notebook containing the full analysis code.
 - `reports/`: Detailed project documentation and PDF summary.
 
